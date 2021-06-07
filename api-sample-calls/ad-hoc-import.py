@@ -3,13 +3,25 @@ import requests
 import os
 import datetime
 import sys
+import subprocess
 from urllib import parse
+from shutil import which
 
-dd_auth_token = os.environ["DEFECT_DOJO_API_TOKEN"]
+def error(*args):
+    for arg in args:
+        print(arg, end=" ")
+    print()
+    sys.exit(-1)
 
-# Assuming all products are manually created on DD
+if "DEFECTDOJO_API_TOKEN" in os.environ:
+    dd_auth_token = os.environ["DEFECTDOJO_API_TOKEN"]
+else:
+    error("Error: DEFECTDOJO_API_TOKEN is not set!")
+
+DD_SERVER_URL = "https://dd.meterian.io/"
+
 def find_product_by_project_name(project_name):
-    url = 'https://dd.meterian.io/api/v2/products/?' + parse.urlencode({"name": project_name})
+    url = DD_SERVER_URL + '/api/v2/products/?' + parse.urlencode({"name": project_name})
     headers = {
         "accept": "application/json",
         "Authorization": "Token " + dd_auth_token,
@@ -17,15 +29,17 @@ def find_product_by_project_name(project_name):
     }
 
     response = requests.get(url, headers=headers)
-    if response.json()["count"] == 0:
-        print("Error: no products found matching '", project_name, "'")
-        return None
+    if response.status_code == 200:
+        if response.json()["count"] == 0:
+            error("Error: no products found matching '", project_name, "'")
+    else:
+        error("Error: failure while retreiving product with name", project_name, "\n", response)
     
     return response.json()["results"][0]["id"]
     
 
 def create_ad_hoc_engagement(product_id):
-    url = 'https://dd.meterian.io/api/v2/engagements/'
+    url = DD_SERVER_URL + '/api/v2/engagements/'
     headers = {
         "accept": "application/json",
         "Authorization": "Token " + dd_auth_token,
@@ -71,49 +85,34 @@ def create_ad_hoc_engagement(product_id):
     if response.status_code == 201:
         return response.json()["id"]
     else:
-        print("Error: failure while creating engagement", response)
-        return None
+        error("Error: failure while creating engagement", response)
 
 def upload_scan_findings(engagement_id, report_file_path):
-    # report_file_name = "report.json"
-    # report_file_path = os.getcwd() + "/" + report_file_name
-    # url = "http://localhost:8080/api/v2/import-scan/"
-    # headers = {
-    #     "accept": "application/json",
-    #     "Authorization": "Token " + dd_auth_token,
-    #     "Content-Type": "multipart/form-data",
-    # }
+    date = datetime.datetime.now()
+    process = subprocess.Popen([
+        "curl", "-sS", "-X", "POST", DD_SERVER_URL + "/api/v2/import-scan/",
+        "-H",  "accept: application/json",
+        "-H",  "Authorization: Token " + dd_auth_token,
+        "-H",  "Content-Type: multipart/form-data",
+        "-F",  "scan_date="+date.strftime("%F"),
+        "-F",  "minimum_severity=Info",
+        "-F",  "active=true",
+        "-F",  "verified=true",
+        "-F",  "scan_type=Meterian Scan",
+        "-F",  "file=@"+report_file_path+";type=application/json",
+        "-F",  "engagement=" + str(engagement_id),
+        "-F",  "close_old_findings=false",
+        "-F",  "push_to_jira=false"
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout, stderr = process.communicate()
 
-    # files = {
-    #     "file": (report_file_name, open(report_file_path, "rb"), "application/json")
-    # }
-
-    # date = datetime.datetime.now()
-    # payload = {
-    #     "scan_date": date.strftime("%F"),
-    #     "minimum_severity": "Info" ,
-    #     "active": True ,
-    #     "verified": True ,
-    #     "scan_type": "Meterian Scan" ,
-    #     "engagement": engagement_id ,
-    #     "close_old_findings": False ,
-    #     "push_to_jira": False
-    # }
-
-    # response = requests.post(url, headers=headers, data=payload, files=files)
-    # if response.status_code == 201:
-    #     return response.json()["test"]
-    # else:
-    #     print("Error: failure while uploading scan results to Defect Dojo", response)
-    #     return None
-
-    output=os.popen("./import-findings.sh" + " " + report_file_path  + " " + str(engagement_id)).read()
+    error = stderr.decode("utf-8").strip()
+    output=stdout.decode("utf-8").strip()
     if output != "":
         js_out = json.loads(output)
         return js_out["test"]
     else:
-        print("Error: failure while uploading scan results to Defect Dojo")
-        return None
+        error("Error: failure while uploading scan results to Defect Dojo\n", error)
 
 def parse_json(json_input):
     try:
@@ -137,19 +136,37 @@ def get_project_name_from_report(report_path):
     else:
         raise Exception("Could not parse project name from report file " + report_path)
 
-script_args = sys.argv
-if len(script_args[1:]) > 0:
-    report_path = sys.argv[1]
+def is_curl_installed():
+    return which("curl") is not None
 
-    project_name = get_project_name_from_report(report_path)
-    product_id = find_product_by_project_name(project_name)
-    if product_id != None:
-        print("Found product:", product_id)
-        engagement_id = create_ad_hoc_engagement(product_id)
-        if engagement_id != None:
-            print("Created new AdHoc import engagement:", engagement_id)
-            test_id = upload_scan_findings(engagement_id, report_path)
-            if test_id != None:
-                print("Imported findigs to test:", test_id)
+def is_dd_server_reachable():
+    try:
+        response = requests.get(DD_SERVER_URL + "/api/v2/")
+        if response.status_code != 200:
+            raise Exception()
+    except:
+        error("Error: Defect Dojo is not reachable")
+
+if is_curl_installed():
+
+    is_dd_server_reachable()
+
+    script_args = sys.argv
+    if len(script_args[1:]) > 0:
+        report_path = sys.argv[1]
+
+        project_name = get_project_name_from_report(report_path)
+        product_id = find_product_by_project_name(project_name)
+        print("Fetching for product matching project name:", project_name)
+        if product_id != None:
+            print("Found product (ID: " + str(product_id) + ")")
+            engagement_id = create_ad_hoc_engagement(product_id)
+            if engagement_id != None:
+                print("Created new AdHoc import engagement (ID: " + str(engagement_id) + ")")
+                test_id = upload_scan_findings(engagement_id, report_path)
+                if test_id != None:
+                    print("Imported findigs to test (ID: " + str(test_id) + ")")
+    else:
+        error("Error: expected JSON report path but nothing was provided")
 else:
-    print("Error: expected JSON report path but nothing was provided")
+    error("Error: curl was not found, please install it")
