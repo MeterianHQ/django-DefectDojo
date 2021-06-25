@@ -18,10 +18,14 @@ if "DEFECTDOJO_API_TOKEN" in os.environ:
 else:
     error("Error: DEFECTDOJO_API_TOKEN is not set!")
 
-DD_SERVER_URL = "https://dd.meterian.io/"
+DEFECTDOJO_BASE_URL = "http://localhost/"
+if "DEFECTDOJO_BASE_URL" in os.environ:
+    DEFECTDOJO_BASE_URL = os.environ["DEFECTDOJO_BASE_URL"]
+else:
+    error("Error: DEFECTDOJO_BASE_URL is not set!")
 
 def find_product_by_project_name(project_name):
-    url = DD_SERVER_URL + '/api/v2/products/?' + parse.urlencode({"name": project_name})
+    url = DEFECTDOJO_BASE_URL + '/api/v2/products/?' + parse.urlencode({"name": project_name})
     headers = {
         "accept": "application/json",
         "Authorization": "Token " + dd_auth_token,
@@ -39,7 +43,7 @@ def find_product_by_project_name(project_name):
     
 
 def create_ad_hoc_engagement(product_id):
-    url = DD_SERVER_URL + '/api/v2/engagements/'
+    url = DEFECTDOJO_BASE_URL + '/api/v2/engagements/'
     headers = {
         "accept": "application/json",
         "Authorization": "Token " + dd_auth_token,
@@ -90,7 +94,7 @@ def create_ad_hoc_engagement(product_id):
 def upload_scan_findings(engagement_id, report_file_path):
     date = datetime.datetime.now()
     process = subprocess.Popen([
-        "curl", "-sS", "-X", "POST", DD_SERVER_URL + "/api/v2/import-scan/",
+        "curl", "-sS", "-X", "POST", DEFECTDOJO_BASE_URL + "/api/v2/import-scan/",
         "-H",  "accept: application/json",
         "-H",  "Authorization: Token " + dd_auth_token,
         "-H",  "Content-Type: multipart/form-data",
@@ -141,7 +145,7 @@ def is_curl_installed():
 
 def is_dd_server_reachable():
     try:
-        response = requests.get(DD_SERVER_URL + "/api/v2/")
+        response = requests.get(DEFECTDOJO_BASE_URL + "/api/v2/")
         if response.status_code != 200:
             raise Exception()
     except:
